@@ -199,12 +199,10 @@ def invia_telegram(testo):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     chunk_size = 4000
     chunks = [testo[i:i+chunk_size] for i in range(0, len(testo), chunk_size)]
-
     for chunk in chunks:
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk,
-            "parse_mode": "Markdown"
+            "text": chunk
         }
         risposta = requests.post(url, json=payload, timeout=10)
         risposta.raise_for_status()
