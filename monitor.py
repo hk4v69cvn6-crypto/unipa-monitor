@@ -5,22 +5,14 @@ import requests
 from bs4 import BeautifulSoup
 import anthropic
 
-# ============================================================
-# CONFIGURAZIONE
-# ============================================================
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
 URL_ALBO     = "https://www.unipa.it/amministrazione/arearisorseumane/settorereclutamentoeselezioni/PersonaleTA/indeterminato.html"
 FILE_MEMORIA = "bandi_visti.json"
+PAUSA_TRA_ANALISI = 65
 
-# Pausa in secondi tra un'analisi e l'altra (evita il rate limit)
-PAUSA_TRA_ANALISI = 30
-
-# ============================================================
-# PROFILO CANDIDATO
-# ============================================================
 PROFILO_CANDIDATO = """
 Benedetto Francesco Marino, nato 15/10/1994, cittadino italiano.
 
@@ -54,14 +46,10 @@ ALTRO:
 - Patenti A e B
 """
 
-# ============================================================
-# FUNZIONE 1 — Scraping della pagina
-# ============================================================
 def ottieni_bandi():
     risposta = requests.get(URL_ALBO, timeout=30)
     risposta.raise_for_status()
     soup = BeautifulSoup(risposta.text, "html.parser")
-
     bandi = []
     for tag in soup.find_all(["h1", "h2", "h3", "h4"]):
         testo = tag.get_text(strip=True)
@@ -77,14 +65,9 @@ def ottieni_bandi():
                     break
                 if fratello.name in ["h1", "h2", "h3", "h4"]:
                     break
-
             bandi.append({"titolo": testo, "url_pdf": url_pdf})
-
     return bandi
 
-# ============================================================
-# FUNZIONE 2 — Memoria
-# ============================================================
 def carica_memoria():
     try:
         with open(FILE_MEMORIA, "r", encoding="utf-8") as f:
@@ -96,9 +79,6 @@ def salva_memoria(bandi_visti):
     with open(FILE_MEMORIA, "w", encoding="utf-8") as f:
         json.dump(bandi_visti, f, ensure_ascii=False, indent=2)
 
-# ============================================================
-# FUNZIONE 3 — Download PDF
-# ============================================================
 def scarica_pdf(url):
     try:
         r = requests.get(url, timeout=30)
@@ -108,62 +88,71 @@ def scarica_pdf(url):
         print(f"  PDF non scaricabile: {e}")
         return None
 
-# ============================================================
-# FUNZIONE 4 — Analisi AI
-# ============================================================
 def analizza_bando_con_ai(titolo_bando, pdf_bytes):
     import base64
-
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     prompt_base = f"""
 Sei un assistente esperto in concorsi pubblici universitari italiani.
-Analizza il bando e il profilo del candidato. Rispondi SOLO con il testo
-del messaggio Telegram, già formattato, senza aggiungere altro.
+Analizza il bando e produci ESCLUSIVAMENTE il testo del messaggio Telegram,
+senza introduzioni, senza commenti, senza nulla prima o dopo.
 
 PROFILO CANDIDATO:
 {PROFILO_CANDIDATO}
 
-REGOLE DI FORMATTAZIONE (Telegram Markdown):
-- Usa *testo* per il grassetto
-- Usa _testo_ per il corsivo
-- Usa emoji per i verdetti: ✅ ⚠️ ❌ 🟢 🟡 🔴
-- NON usare # per i titoli, usa il grassetto
-- Massimo 600 parole totali
+REGOLE FONDAMENTALI:
+- NON usare asterischi, underscore, cancelletti o qualsiasi markdown
+- Usa solo testo semplice ed emoji
+- Massimo 700 parole
+- Il verdetto va SEMPRE in cima, prima di tutto il resto
 
-STRUTTURA DEL MESSAGGIO:
+CALCOLO SCADENZA (importante):
+- Cerca nel bando la data di pubblicazione all'Albo o sulla Gazzetta Ufficiale
+- Calcola la scadenza sulla base delle informazioni contenute nel bando, è fondamentale essere il più preciso possibile
+- Calcola la data esatta tenendo conto dei giorni del mese
+- Se la data di pubblicazione non e' nel PDF, scrivi "vedi bando"
+- Indica sempre: "Pubblicato il [data] - Scadenza il [data calcolata] ore 12:00"
 
-*RIEPILOGO*
-• _Categoria:_ [B/C/D/EP e area]
-• _Posti:_ [numero]
-• _Scadenza:_ [data e ora — se non trovata scrivi "vedi bando"]
-• _Sede:_ [destinazione specifica se indicata]
+STRUTTURA OBBLIGATORIA (rispettala esattamente):
 
-*REQUISITI CHIAVE*
-Elenca SOLO i requisiti non banali: titolo studio specifico, certificazioni,
-esperienza minima richiesta, conoscenze tecniche particolari.
-NON elencare mai: età 18+, cittadinanza italiana/UE, idoneità fisica,
-assenza condanne, obbligo leva, assenza parentele con Rettore.
-Questi sono sempre soddisfatti e non vanno ripetuti.
+[riga separatrice: ━━━━━━━━━━━━━━━]
+VERDETTO: [CANDIDATURA CONSIGLIATA / CON RISERVE / NON COMPATIBILE] [emoji 🟢/🟡/🔴]
+[una riga di motivazione sintetica]
+[riga separatrice: ━━━━━━━━━━━━━━━]
 
-*COMPATIBILITÀ*
-Per ogni requisito non banale: ✅ soddisfatto / ⚠️ parziale / ❌ assente
-Sii preciso e non ottimista.
+RIEPILOGO
+Categoria: [es. D - Area amministrativo-gestionale]
+Posti: [numero]
+[Pubblicato il X - Scadenza il Y ore 12:00]
+Sede: [destinazione specifica e/o reparto specifico se indicato]
 
-*TITOLI VALUTABILI*
-Se il bando prevede valutazione titoli, indica brevemente quali titoli
-del candidato possono dare punteggio aggiuntivo. Se non prevista, ometti.
+REQUISITI CHIAVE
+[elenca solo requisiti non banali: titolo studio specifico, certificazioni,
+esperienza minima, conoscenze tecniche particolari]
+[NON elencare mai: eta 18+, cittadinanza, idoneita fisica, assenza condanne,
+obbligo leva, assenza parentele con Rettore — sono sempre soddisfatti]
 
-*VERDETTO*
-🟢 CANDIDATURA CONSIGLIATA / 🟡 CON RISERVE / 🔴 NON COMPATIBILE
-_Una riga di motivazione._
+COMPATIBILITA
+[per ogni requisito non banale: emoji + requisito + valutazione in una riga]
+✅ = soddisfatto pienamente
+⚠️ = soddisfatto parzialmente o con riserve
+❌ = non soddisfatto
+
+TITOLI VALUTABILI
+[se il bando prevede valutazione titoli: elenca quali titoli del candidato
+possono dare punteggio aggiuntivo e stima approssimativa se possibile]
+[se non prevista valutazione titoli: scrivi "Non prevista valutazione titoli"]
+
+MATERIE D'ESAME
+[elenca sinteticamente le materie su cui vertono le prove, una per riga]
+[utile per capire cosa studiare in caso di candidatura]
 """
 
     if pdf_bytes is None:
-        prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile):\n{titolo_bando}"
+        prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile, analizza solo dal titolo):\n{titolo_bando}"
         msg = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=800,
+            max_tokens=900,
             messages=[{"role": "user", "content": prompt}]
         )
         return msg.content[0].text
@@ -171,7 +160,7 @@ _Una riga di motivazione._
     pdf_base64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
     msg = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=800,
+        max_tokens=900,
         messages=[{
             "role": "user",
             "content": [
@@ -192,9 +181,6 @@ _Una riga di motivazione._
     )
     return msg.content[0].text
 
-# ============================================================
-# FUNZIONE 5 — Invio Telegram
-# ============================================================
 def invia_telegram(testo):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     chunk_size = 4000
@@ -207,14 +193,11 @@ def invia_telegram(testo):
         risposta = requests.post(url, json=payload, timeout=10)
         risposta.raise_for_status()
 
-# ============================================================
-# PROGRAMMA PRINCIPALE
-# ============================================================
 def main():
     print("Avvio monitoraggio bandi UniPa...")
 
     bandi_visti = carica_memoria()
-    print(f"Bandi già in memoria: {len(bandi_visti)}")
+    print(f"Bandi gia in memoria: {len(bandi_visti)}")
 
     bandi_attuali = ottieni_bandi()
     print(f"Bandi trovati sulla pagina: {len(bandi_attuali)}")
@@ -237,26 +220,24 @@ def main():
         print("  Analisi con Claude...")
         analisi = analizza_bando_con_ai(bando["titolo"], pdf_bytes)
 
-        titolo_breve = bando["titolo"][:180] + "..." if len(bando["titolo"]) > 180 else bando["titolo"]
-        link_pdf = f"\n📄 [Bando PDF]({bando['url_pdf']})" if bando["url_pdf"] else ""
+        link_pdf = f"📄 Bando PDF: {bando['url_pdf']}" if bando["url_pdf"] else ""
 
-        messaggio = f"""🔔 *NUOVO BANDO UNIPA*
-_{titolo_breve}_
+        messaggio = f"""🔔 NUOVO BANDO UNIPA
+
+{bando['titolo']}
+
 {link_pdf}
 
 {analisi}
 
-🔗 [Tutti i bandi]({URL_ALBO})"""
+🔗 Tutti i bandi: {URL_ALBO}"""
 
         print("  Invio Telegram...")
         invia_telegram(messaggio)
 
-        # Salva subito dopo ogni notifica: se lo script si interrompe,
-        # i bandi già notificati non vengono ripetuti al prossimo avvio
         bandi_visti.append(bando["titolo"])
         salva_memoria(bandi_visti)
 
-        # Pausa per rispettare i rate limit dell'API
         if i < len(nuovi_bandi) - 1:
             print(f"  Attendo {PAUSA_TRA_ANALISI}s...")
             time.sleep(PAUSA_TRA_ANALISI)
