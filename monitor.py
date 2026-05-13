@@ -166,7 +166,7 @@ Fornisci:
 4. Raccomandazione: vale la pena approfondire?
 """
         messaggio = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -212,7 +212,7 @@ Leggi attentamente il bando PDF allegato e rispondi in modo strutturato con:
 """
 
     messaggio = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=""claude-sonnet-4-5",
         max_tokens=1500,
         messages=[{
             "role": "user",
