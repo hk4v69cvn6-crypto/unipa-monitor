@@ -33,7 +33,7 @@ ESPERIENZA PROFESSIONALE (~4 anni, settore privato HR):
 - Docente formazione professionale freelance, forIT S.r.l. (12 mesi)
 
 COMPETENZE DIGITALI:
-- MS Office avanzato (Excel: pivot, CERCA.VERT; Word, SharePoint, Forms)
+- MS Office avanzato (Excel: pivot, CERCA.VERT; Word, Forms)
 - Gestionali HR: Zucchetti HR (avanzato), AS400 (avanzato), SAP (base)
 - Piattaforme FAD e videoconferencing
 
@@ -105,13 +105,15 @@ REGOLE FONDAMENTALI:
 - Usa solo testo semplice ed emoji
 - Massimo 700 parole
 - Il verdetto va SEMPRE in cima, prima di tutto il resto
+- NON scrivere testi tranciati o parole interrotte per mancanza di caratteri, 
+il messaggio deve risultare quanto più professionale possibile
 
 CALCOLO SCADENZA (importante):
 - Cerca nel bando la data di pubblicazione all'Albo o sulla Gazzetta Ufficiale
 - Calcola la scadenza sulla base delle informazioni contenute nel bando, è fondamentale essere il più preciso possibile
 - Calcola la data esatta tenendo conto dei giorni del mese
 - Se la data di pubblicazione non e' nel PDF, scrivi "vedi bando"
-- Indica sempre: "Pubblicato il [data] - Scadenza il [data calcolata] ore 12:00"
+- Indica sempre: "Pubblicato il [data] - Scadenza il [data contenuta o calcolata] ore 12:00"
 
 STRUTTURA OBBLIGATORIA (rispettala esattamente):
 
