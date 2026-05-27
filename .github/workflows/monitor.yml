@@ -2,8 +2,8 @@ name: Monitor Bandi UniPa
 
 on:
   schedule:
-    # Gira ogni giorno alle 9:00 UTC (le 11:00 ora italiana)
-    - cron: '0 9 * * *'
+    # Gira ogni giorno alle 6:00 UTC (le 08:00 ora italiana)
+    - cron: '0 6 * * *'
   workflow_dispatch:
     # Permette di avviarlo manualmente dal sito GitHub
 
