@@ -2,14 +2,12 @@ name: Monitor Bandi UniPa
 
 on:
   schedule:
-    # Gira ogni giorno alle 6:00 UTC (le 08:00 ora italiana)
-    - cron: '0 6 * * *'
+    - cron: '0 9 * * *'
   workflow_dispatch:
-    # Permette di avviarlo manualmente dal sito GitHub
 
 jobs:
   monitor:
-    runs-on: ubuntu-latest  # computer virtuale con Linux
+    runs-on: ubuntu-latest
 
     steps:
       - name: Scarica il codice del repository
@@ -35,3 +33,4 @@ jobs:
         with:
           commit_message: "Aggiorna memoria bandi visti"
           file_pattern: bandi_visti.json
+        continue-on-error: true
