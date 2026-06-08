@@ -1,18 +1,27 @@
 import os
 import json
 import time
+import datetime
+import re
 import requests
 from bs4 import BeautifulSoup
 import anthropic
 
+# ============================================================
+# CONFIGURAZIONE
+# ============================================================
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
-URL_ALBO     = "https://www.unipa.it/amministrazione/arearisorseumane/settorereclutamentoeselezioni/PersonaleTA/indeterminato.html"
-FILE_MEMORIA = "bandi_visti.json"
+URL_ALBO      = "https://www.unipa.it/amministrazione/arearisorseumane/settorereclutamentoeselezioni/PersonaleTA/indeterminato.html"
+FILE_MEMORIA  = "bandi_visti.json"
+FILE_OFFSET   = "telegram_offset.json"
 PAUSA_TRA_ANALISI = 65
 
+# ============================================================
+# PROFILO CANDIDATO (versione completa)
+# ============================================================
 PROFILO_CANDIDATO = """
 Benedetto Francesco Marino, nato 15/10/1994, cittadino italiano.
 
@@ -33,7 +42,7 @@ ESPERIENZA PROFESSIONALE (~4 anni, settore privato HR):
 - Docente formazione professionale freelance, forIT S.r.l. (12 mesi)
 
 COMPETENZE DIGITALI:
-- MS Office avanzato (Excel: pivot, CERCA.VERT; Word, Forms)
+- MS Office avanzato (Excel: pivot, CERCA.VERT; Word, Forms e più in generale molta dimestichezza con entrambe le suite Google e Microsoft)
 - Gestionali HR: Zucchetti HR (avanzato), AS400 (avanzato), SAP (base)
 - Piattaforme FAD e videoconferencing
 
@@ -46,39 +55,101 @@ ALTRO:
 - Patenti A e B
 """
 
+# ============================================================
+# UTILITÀ
+# ============================================================
+def estrai_codice(titolo):
+    """Estrae il numero DDG dal titolo. Es: '14778' da 'D.D.G. n. 14778/2025...'"""
+    match = re.search(r'n\.\s*(\d+)', titolo)
+    return match.group(1) if match else titolo[:15].replace(" ", "")
+
+# ============================================================
+# MEMORIA (con migrazione automatica dal vecchio formato)
+# ============================================================
+def carica_memoria():
+    try:
+        with open(FILE_MEMORIA, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not data:
+            return []
+        # Migrazione automatica: vecchio formato era lista di stringhe
+        if isinstance(data[0], str):
+            print("  Migrazione memoria al nuovo formato...")
+            return [{
+                "titolo":           t,
+                "codice":           estrai_codice(t),
+                "url_pdf":          None,
+                "data_rilevamento": datetime.date.today().isoformat(),
+                "verdetto":         "❓",
+                "categoria":        "N/D",
+                "scadenza":         "N/D",
+                "seguito":          False,
+                "documenti_visti":  []
+            } for t in data]
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def salva_memoria(bandi):
+    with open(FILE_MEMORIA, "w", encoding="utf-8") as f:
+        json.dump(bandi, f, ensure_ascii=False, indent=2)
+
+def titoli_in_memoria(memoria):
+    return {b["titolo"] if isinstance(b, dict) else b for b in memoria}
+
+# ============================================================
+# OFFSET TELEGRAM
+# ============================================================
+def carica_offset():
+    try:
+        with open(FILE_OFFSET, "r") as f:
+            return json.load(f).get("offset", 0)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return 0
+
+def salva_offset(offset):
+    with open(FILE_OFFSET, "w") as f:
+        json.dump({"offset": offset}, f)
+
+# ============================================================
+# SCRAPING (con tutti i PDF per il tracking aggiornamenti)
+# ============================================================
 def ottieni_bandi():
     risposta = requests.get(URL_ALBO, timeout=30)
     risposta.raise_for_status()
     soup = BeautifulSoup(risposta.text, "html.parser")
+
     bandi = []
     for tag in soup.find_all(["h1", "h2", "h3", "h4"]):
         testo = tag.get_text(strip=True)
         if "D.D.G." in testo or "Selezione pubblica" in testo or "Concorso pubblico" in testo:
-            url_pdf = None
+            url_pdf_principale = None
+            tutti_i_pdf = []
+
             for fratello in tag.find_next_siblings():
-                link = fratello.find("a", href=lambda h: h and ".pdf" in h.lower() and "bando" in h.lower())
-                if link:
+                links = fratello.find_all("a", href=lambda h: h and ".pdf" in h.lower())
+                for link in links:
                     href = link["href"]
                     if href.startswith("/"):
                         href = "https://www.unipa.it" + href
-                    url_pdf = href
-                    break
+                    if href not in tutti_i_pdf:
+                        tutti_i_pdf.append(href)
+                    if url_pdf_principale is None and "bando" in href.lower():
+                        url_pdf_principale = href
                 if fratello.name in ["h1", "h2", "h3", "h4"]:
                     break
-            bandi.append({"titolo": testo, "url_pdf": url_pdf})
+
+            bandi.append({
+                "titolo":      testo,
+                "url_pdf":     url_pdf_principale,
+                "tutti_i_pdf": tutti_i_pdf
+            })
+
     return bandi
 
-def carica_memoria():
-    try:
-        with open(FILE_MEMORIA, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-def salva_memoria(bandi_visti):
-    with open(FILE_MEMORIA, "w", encoding="utf-8") as f:
-        json.dump(bandi_visti, f, ensure_ascii=False, indent=2)
-
+# ============================================================
+# DOWNLOAD PDF
+# ============================================================
 def scarica_pdf(url):
     try:
         r = requests.get(url, timeout=30)
@@ -88,14 +159,29 @@ def scarica_pdf(url):
         print(f"  PDF non scaricabile: {e}")
         return None
 
+# ============================================================
+# ANALISI AI
+# Prompt unificato: mantiene tutte le istruzioni del vecchio
+# script + aggiunge la riga META per i metadati strutturati
+# ============================================================
 def analizza_bando_con_ai(titolo_bando, pdf_bytes):
     import base64
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     prompt_base = f"""
 Sei un assistente esperto in concorsi pubblici universitari italiani.
-Analizza il bando e produci ESCLUSIVAMENTE il testo del messaggio Telegram,
-senza introduzioni, senza commenti, senza nulla prima o dopo.
+Analizza il bando e produci ESATTAMENTE questo output, senza nulla prima o dopo.
+
+PRIMA RIGA OBBLIGATORIA (non modificare il formato):
+META|VERDETTO|CATEGORIA|SCADENZA
+
+Dove:
+- VERDETTO e' una di: CONSIGLIATA, RISERVE, NON_COMPATIBILE
+- CATEGORIA es: D - Area amministrativo-gestionale
+- SCADENZA: data esatta calcolata in formato GG/MM/AAAA (vedi istruzioni sotto)
+  Se non calcolabile scrivi: N/D
+
+POI UNA RIGA VUOTA, POI IL MESSAGGIO TELEGRAM:
 
 PROFILO CANDIDATO:
 {PROFILO_CANDIDATO}
@@ -103,29 +189,32 @@ PROFILO CANDIDATO:
 REGOLE FONDAMENTALI:
 - NON usare asterischi, underscore, cancelletti o qualsiasi markdown
 - Usa solo testo semplice ed emoji
-- Massimo 700 parole
+- Massimo 700 parole per il messaggio Telegram (esclusa la riga META)
 - Il verdetto va SEMPRE in cima, prima di tutto il resto
-- NON scrivere testi tranciati o parole interrotte per mancanza di caratteri, 
-il messaggio deve risultare quanto più professionale possibile
+- NON scrivere testi troncati o parole interrotte per mancanza di caratteri,
+  il messaggio deve risultare quanto piu' professionale possibile
 
-CALCOLO SCADENZA (importante):
+CALCOLO SCADENZA (fondamentale, sii preciso):
 - Cerca nel bando la data di pubblicazione all'Albo o sulla Gazzetta Ufficiale
-- Calcola la scadenza sulla base delle informazioni contenute nel bando, è fondamentale essere il più preciso possibile
-- Calcola la data esatta tenendo conto dei giorni del mese
+- Calcola la scadenza sulla base delle informazioni contenute nel bando
+- Tieni conto dei giorni esatti del mese (es. febbraio ha 28/29 giorni)
+- Se la data e' esplicitamente indicata nel bando, usala direttamente
+- Se va calcolata come "30 giorni dalla pubblicazione", calcola la data esatta
 - Se la data di pubblicazione non e' nel PDF, scrivi "vedi bando"
-- Indica sempre: "Pubblicato il [data] - Scadenza il [data contenuta o calcolata] ore 12:00"
+- Indica sempre: "Pubblicato il [data] - Scadenza il [data] ore 12:00"
+- Riporta la stessa data calcolata anche nella riga META come SCADENZA
 
-STRUTTURA OBBLIGATORIA (rispettala esattamente):
+STRUTTURA OBBLIGATORIA DEL MESSAGGIO TELEGRAM:
 
-[riga separatrice: ━━━━━━━━━━━━━━━]
-VERDETTO: [CANDIDATURA CONSIGLIATA / CON RISERVE / NON COMPATIBILE] [emoji 🟢/🟡/🔴]
+━━━━━━━━━━━━━━━
+VERDETTO: [CANDIDATURA CONSIGLIATA / CON RISERVE / NON COMPATIBILE] [🟢/🟡/🔴]
 [una riga di motivazione sintetica]
-[riga separatrice: ━━━━━━━━━━━━━━━]
+━━━━━━━━━━━━━━━
 
 RIEPILOGO
 Categoria: [es. D - Area amministrativo-gestionale]
 Posti: [numero]
-[Pubblicato il X - Scadenza il Y ore 12:00]
+Pubblicato il [data] - Scadenza il [data calcolata] ore 12:00
 Sede: [destinazione specifica e/o reparto specifico se indicato]
 
 REQUISITI CHIAVE
@@ -151,7 +240,7 @@ MATERIE D'ESAME
 """
 
     if pdf_bytes is None:
-        prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile, analizza solo dal titolo):\n{titolo_bando}"
+        prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile):\n{titolo_bando}"
         msg = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=900,
@@ -168,48 +257,265 @@ MATERIE D'ESAME
             "content": [
                 {
                     "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": pdf_base64
-                    }
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}
                 },
-                {
-                    "type": "text",
-                    "text": prompt_base
-                }
+                {"type": "text", "text": prompt_base}
             ]
         }]
     )
     return msg.content[0].text
 
+def parse_risposta_ai(risposta_raw):
+    """
+    Separa la riga META dal messaggio Telegram.
+    Restituisce (meta_dict, testo_telegram).
+    """
+    righe = risposta_raw.strip().split("\n")
+    meta  = {"verdetto": "❓", "categoria": "N/D", "scadenza": "N/D"}
+    testo = risposta_raw
+
+    if righe and righe[0].startswith("META|"):
+        parti = righe[0].split("|")
+        if len(parti) >= 4:
+            v = parti[1].strip()
+            meta["verdetto"]  = "🟢" if v == "CONSIGLIATA" else \
+                                "🟡" if v == "RISERVE" else \
+                                "🔴" if v == "NON_COMPATIBILE" else "❓"
+            meta["categoria"] = parti[2].strip()
+            meta["scadenza"]  = parti[3].strip()
+        # Rimuovi riga META e riga vuota successiva
+        testo = "\n".join(righe[2:]).strip()
+
+    return meta, testo
+
+# ============================================================
+# INVIO TELEGRAM
+# ============================================================
 def invia_telegram(testo):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     chunk_size = 4000
     chunks = [testo[i:i+chunk_size] for i in range(0, len(testo), chunk_size)]
     for chunk in chunks:
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk
-        }
-        risposta = requests.post(url, json=payload, timeout=10)
-        risposta.raise_for_status()
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk}
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
 
+# ============================================================
+# COMANDI TELEGRAM
+# /segui CODICE  — inizia a seguire un bando
+# /smetti CODICE — smette di seguirlo
+# /seguiti       — lista bandi seguiti
+# ============================================================
+def processa_comandi(memoria):
+    offset = carica_offset()
+    url    = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+
+    try:
+        r       = requests.get(url, params={"offset": offset, "timeout": 5}, timeout=10)
+        r.raise_for_status()
+        updates = r.json().get("result", [])
+    except Exception as e:
+        print(f"  Errore lettura comandi: {e}")
+        return memoria
+
+    if not updates:
+        print("  Nessun nuovo comando Telegram.")
+        return memoria
+
+    nuovo_offset = updates[-1]["update_id"] + 1
+
+    for update in updates:
+        msg   = update.get("message", {})
+        testo = msg.get("text", "").strip()
+        if not testo.startswith("/"):
+            continue
+
+        parti   = testo.split()
+        comando = parti[0].lower()
+
+        if comando == "/segui" and len(parti) > 1:
+            codice  = parti[1]
+            trovato = False
+            for b in memoria:
+                if b.get("codice") == codice:
+                    b["seguito"] = True
+                    trovato = True
+                    invia_telegram(
+                        f"✅ Ora seguo il bando {codice}:\n{b['titolo'][:120]}\n\n"
+                        f"Riceverai notifiche per ogni nuovo documento pubblicato.\n"
+                        f"Per smettere: /smetti {codice}"
+                    )
+                    break
+            if not trovato:
+                invia_telegram(
+                    f"⚠️ Bando con codice {codice} non trovato.\n"
+                    f"Usa il numero DDG visibile nel titolo del bando.\n"
+                    f"Es: /segui 14778"
+                )
+
+        elif comando == "/smetti" and len(parti) > 1:
+            codice = parti[1]
+            for b in memoria:
+                if b.get("codice") == codice:
+                    b["seguito"] = False
+                    invia_telegram(f"🔕 Ho smesso di seguire il bando {codice}.")
+                    break
+
+        elif comando == "/seguiti":
+            seguiti = [b for b in memoria if b.get("seguito")]
+            if not seguiti:
+                invia_telegram(
+                    "Non stai seguendo nessun bando.\n\n"
+                    "Per seguire un bando:\n/segui CODICE_DDG\n\n"
+                    "Il codice e' il numero dopo 'D.D.G. n.' nel titolo."
+                )
+            else:
+                testo_r = f"📌 BANDI CHE STAI SEGUENDO ({len(seguiti)})\n\n"
+                for b in seguiti:
+                    testo_r += f"[{b['codice']}] {b['titolo'][:80]}...\n"
+                    testo_r += f"Categoria: {b.get('categoria','N/D')}\n"
+                    testo_r += f"Scadenza: {b.get('scadenza','N/D')}\n\n"
+                testo_r += "Per smettere: /smetti CODICE_DDG"
+                invia_telegram(testo_r)
+
+    salva_offset(nuovo_offset)
+    return memoria
+
+# ============================================================
+# CONTROLLO AGGIORNAMENTI BANDI SEGUITI
+# ============================================================
+def controlla_aggiornamenti(memoria, bandi_attuali):
+    mappa = {b["titolo"]: b for b in bandi_attuali}
+    trovati = False
+
+    for bando_mem in memoria:
+        if not bando_mem.get("seguito"):
+            continue
+        bando_attuale = mappa.get(bando_mem["titolo"])
+        if not bando_attuale:
+            continue
+
+        pdf_visti   = set(bando_mem.get("documenti_visti", []))
+        pdf_attuali = set(bando_attuale.get("tutti_i_pdf", []))
+        nuovi_pdf   = pdf_attuali - pdf_visti
+
+        if nuovi_pdf:
+            trovati = True
+            print(f"  Aggiornamento: {bando_mem['titolo'][:60]}...")
+            messaggio = (
+                f"🔔 AGGIORNAMENTO BANDO SEGUITO\n\n"
+                f"[{bando_mem['codice']}] {bando_mem['titolo']}\n\n"
+                f"Nuovi documenti pubblicati:\n"
+            )
+            for url in nuovi_pdf:
+                nome = url.split("/")[-1]
+                messaggio += f"• {nome}\n  {url}\n"
+            invia_telegram(messaggio)
+            bando_mem["documenti_visti"] = list(pdf_attuali)
+
+    if not trovati:
+        print("  Nessun aggiornamento sui bandi seguiti.")
+
+    return memoria
+
+# ============================================================
+# RECAP DOMENICALE
+# ============================================================
+def invia_recap_domenicale(memoria):
+    oggi    = datetime.date.today()
+    seguiti = [b for b in memoria if b.get("seguito")]
+    verdi   = [b for b in memoria if b.get("verdetto") == "🟢"]
+    gialli  = [b for b in memoria if b.get("verdetto") == "🟡"]
+    rossi   = [b for b in memoria if b.get("verdetto") == "🔴"]
+    altri   = [b for b in memoria if b.get("verdetto") not in ["🟢","🟡","🔴"]]
+
+    # Scadenze entro 7 giorni
+    scadenze_vicine = []
+    for b in memoria:
+        scadenza = b.get("scadenza", "N/D")
+        if not scadenza or scadenza == "N/D" or "vedi" in scadenza.lower():
+            continue
+        try:
+            match = re.search(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})', scadenza)
+            if match:
+                g, m, a = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                data_sc = datetime.date(a, m, g)
+                delta   = (data_sc - oggi).days
+                if 0 <= delta <= 7:
+                    scadenze_vicine.append((b, delta, data_sc))
+        except Exception:
+            pass
+    scadenze_vicine.sort(key=lambda x: x[2])
+
+    msg  = f"📋 RECAP SETTIMANALE BANDI UNIPA\n"
+    msg += f"Domenica {oggi.strftime('%d/%m/%Y')}\n"
+    msg += "━━━━━━━━━━━━━━━\n\n"
+
+    if seguiti:
+        msg += f"📌 BANDI CHE STAI SEGUENDO ({len(seguiti)})\n"
+        for b in seguiti:
+            n_doc = len(b.get("documenti_visti", []))
+            msg += f"• [{b['codice']}] {b['titolo'][:70]}...\n"
+            msg += f"  {b.get('categoria','N/D')} | Scad: {b.get('scadenza','N/D')}\n"
+            msg += f"  Documenti monitorati: {n_doc}\n"
+        msg += "\n"
+
+    if scadenze_vicine:
+        msg += "⚠️ SCADENZE QUESTA SETTIMANA\n"
+        for b, delta, data in scadenze_vicine:
+            quando = "OGGI" if delta == 0 else "DOMANI" if delta == 1 else f"tra {delta} giorni"
+            msg += f"• {b['titolo'][:65]}...\n"
+            msg += f"  {data.strftime('%d/%m')} ore 12:00 ({quando})\n"
+        msg += "\n"
+
+    if verdi:
+        msg += f"🟢 CANDIDABILI ({len(verdi)})\n"
+        for b in verdi:
+            msg += f"• {b.get('categoria','N/D')} | Scad: {b.get('scadenza','N/D')}\n"
+            msg += f"  {b['titolo'][:70]}...\n"
+        msg += "\n"
+
+    if gialli:
+        msg += f"🟡 CON RISERVE ({len(gialli)})\n"
+        for b in gialli:
+            msg += f"• {b.get('categoria','N/D')} | Scad: {b.get('scadenza','N/D')}\n"
+            msg += f"  {b['titolo'][:70]}...\n"
+        msg += "\n"
+
+    if rossi:
+        msg += f"🔴 NON COMPATIBILI ({len(rossi)}) — nessun dettaglio\n\n"
+
+    if altri:
+        msg += f"❓ BANDI SENZA ANALISI ({len(altri)}) — verranno analizzati al prossimo aggiornamento\n\n"
+
+    msg += f"🔗 {URL_ALBO}"
+    invia_telegram(msg)
+
+# ============================================================
+# PROGRAMMA PRINCIPALE
+# ============================================================
 def main():
-    print("Avvio monitoraggio bandi UniPa...")
+    oggi = datetime.date.today()
+    print(f"Avvio monitoraggio bandi UniPa — {oggi.isoformat()}...")
 
-    bandi_visti = carica_memoria()
-    print(f"Bandi gia in memoria: {len(bandi_visti)}")
+    # 1. Carica memoria e processa comandi Telegram
+    memoria = carica_memoria()
+    print(f"Bandi in memoria: {len(memoria)}")
+    print("Controllo comandi Telegram...")
+    memoria = processa_comandi(memoria)
 
+    # 2. Scarica lista bandi attuale
     bandi_attuali = ottieni_bandi()
-    print(f"Bandi trovati sulla pagina: {len(bandi_attuali)}")
+    print(f"Bandi sulla pagina: {len(bandi_attuali)}")
 
-    nuovi_bandi = [b for b in bandi_attuali if b["titolo"] not in bandi_visti]
+    # 3. Controlla aggiornamenti sui bandi seguiti
+    print("Controllo aggiornamenti bandi seguiti...")
+    memoria = controlla_aggiornamenti(memoria, bandi_attuali)
+
+    # 4. Trova e analizza bandi nuovi
+    titoli_visti = titoli_in_memoria(memoria)
+    nuovi_bandi  = [b for b in bandi_attuali if b["titolo"] not in titoli_visti]
     print(f"Bandi nuovi da analizzare: {len(nuovi_bandi)}")
-
-    if not nuovi_bandi:
-        print("Nessun nuovo bando. Uscita.")
-        return
 
     for i, bando in enumerate(nuovi_bandi):
         print(f"\n[{i+1}/{len(nuovi_bandi)}] {bando['titolo'][:80]}...")
@@ -220,31 +526,48 @@ def main():
             pdf_bytes = scarica_pdf(bando["url_pdf"])
 
         print("  Analisi con Claude...")
-        analisi = analizza_bando_con_ai(bando["titolo"], pdf_bytes)
+        risposta_raw        = analizza_bando_con_ai(bando["titolo"], pdf_bytes)
+        meta, testo_telegram = parse_risposta_ai(risposta_raw)
 
-        link_pdf = f"📄 Bando PDF: {bando['url_pdf']}" if bando["url_pdf"] else ""
+        # Salva in memoria con formato arricchito
+        record = {
+            "titolo":           bando["titolo"],
+            "codice":           estrai_codice(bando["titolo"]),
+            "url_pdf":          bando["url_pdf"],
+            "data_rilevamento": oggi.isoformat(),
+            "verdetto":         meta["verdetto"],
+            "categoria":        meta["categoria"],
+            "scadenza":         meta["scadenza"],
+            "seguito":          False,
+            "documenti_visti":  bando.get("tutti_i_pdf", [])
+        }
+        memoria.append(record)
+        salva_memoria(memoria)
 
-        messaggio = f"""🔔 NUOVO BANDO UNIPA
-
-{bando['titolo']}
-
-{link_pdf}
-
-{analisi}
-
-🔗 Tutti i bandi: {URL_ALBO}"""
-
+        # Invia notifica Telegram
+        link_pdf  = f"📄 Bando PDF: {bando['url_pdf']}" if bando["url_pdf"] else ""
+        messaggio = (
+            f"🔔 NUOVO BANDO UNIPA\n\n"
+            f"{bando['titolo']}\n\n"
+            f"{link_pdf}\n\n"
+            f"{testo_telegram}\n\n"
+            f"Per seguire gli aggiornamenti: /segui {record['codice']}\n"
+            f"🔗 Tutti i bandi: {URL_ALBO}"
+        )
         print("  Invio Telegram...")
         invia_telegram(messaggio)
-
-        bandi_visti.append(bando["titolo"])
-        salva_memoria(bandi_visti)
 
         if i < len(nuovi_bandi) - 1:
             print(f"  Attendo {PAUSA_TRA_ANALISI}s...")
             time.sleep(PAUSA_TRA_ANALISI)
 
-    print(f"\nCompletato. {len(nuovi_bandi)} bandi notificati.")
+    # 5. Recap domenicale (solo la domenica)
+    if oggi.weekday() == 6:
+        print("\nOggi e' domenica — invio recap settimanale...")
+        invia_recap_domenicale(memoria)
+
+    salva_memoria(memoria)
+    print(f"\nCompletato.")
 
 if __name__ == "__main__":
     main()
