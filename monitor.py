@@ -124,9 +124,21 @@ def ottieni_bandi():
         testo = tag.get_text(strip=True)
         if "D.D.G." in testo or "Selezione pubblica" in testo or "Concorso pubblico" in testo:
             url_pdf_principale = None
-            tutti_i_pdf = []
+            tutti_i_pdf        = []
+            scadenza_pagina    = None
 
             for fratello in tag.find_next_siblings():
+                # Cerca scadenza nel testo dell'elemento
+                testo_fratello = fratello.get_text(" ", strip=True)
+                if not scadenza_pagina and "scadenza" in testo_fratello.lower():
+                    match = re.search(
+                        r'[Ss]cadenza\s+(\d{1,2}[/\-]\d{1,2}[/\-]\d{4}(?:\s+alle\s+ore\s+\d{1,2}:\d{2})?)',
+                        testo_fratello
+                    )
+                    if match:
+                        scadenza_pagina = match.group(1).strip()
+
+                # Raccogli tutti i PDF della sezione
                 links = fratello.find_all("a", href=lambda h: h and ".pdf" in h.lower())
                 for link in links:
                     href = link["href"]
@@ -136,13 +148,15 @@ def ottieni_bandi():
                         tutti_i_pdf.append(href)
                     if url_pdf_principale is None and "bando" in href.lower():
                         url_pdf_principale = href
+
                 if fratello.name in ["h1", "h2", "h3", "h4"]:
                     break
 
             bandi.append({
-                "titolo":      testo,
-                "url_pdf":     url_pdf_principale,
-                "tutti_i_pdf": tutti_i_pdf
+                "titolo":        testo,
+                "url_pdf":       url_pdf_principale,
+                "tutti_i_pdf":   tutti_i_pdf,
+                "scadenza_pag":  scadenza_pagina  # letta direttamente dalla pagina
             })
 
     return bandi
