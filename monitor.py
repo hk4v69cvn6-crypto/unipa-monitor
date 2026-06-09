@@ -299,7 +299,7 @@ MATERIE D'ESAME
         prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile):\n{titolo_bando}"
         msg = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=1200,
+            max_tokens=1800,
             messages=[{"role": "user", "content": prompt}]
         )
         return msg.content[0].text
@@ -307,7 +307,7 @@ MATERIE D'ESAME
     pdf_base64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
     msg = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=1200,
+        max_tokens=1800,
         messages=[{
             "role": "user",
             "content": [
@@ -353,12 +353,28 @@ def parse_risposta_ai(risposta_raw):
 # ============================================================
 def invia_telegram(testo):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    chunk_size = 4000
-    chunks = [testo[i:i+chunk_size] for i in range(0, len(testo), chunk_size)]
+
+    if len(testo) <= 3800:
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": testo}
+        requests.post(url, json=payload, timeout=10).raise_for_status()
+        return
+
+    # Divide solo ai fine riga, mai a metà di una parola o URL
+    chunks = []
+    while len(testo) > 3800:
+        split_pos = testo.rfind('\n', 0, 3800)
+        if split_pos == -1:
+            split_pos = testo.rfind(' ', 0, 3800)
+        if split_pos == -1:
+            split_pos = 3800
+        chunks.append(testo[:split_pos])
+        testo = testo[split_pos:].lstrip('\n')
+    if testo:
+        chunks.append(testo)
+
     for chunk in chunks:
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk}
-        r = requests.post(url, json=payload, timeout=10)
-        r.raise_for_status()
+        requests.post(url, json=payload, timeout=10).raise_for_status()
 
 # ============================================================
 # COMANDI TELEGRAM
