@@ -178,9 +178,16 @@ def scarica_pdf(url):
 # Prompt unificato: mantiene tutte le istruzioni del vecchio
 # script + aggiunge la riga META per i metadati strutturati
 # ============================================================
-def analizza_bando_con_ai(titolo_bando, pdf_bytes):
+def analizza_bando_con_ai(titolo_bando, pdf_bytes, scadenza_nota=None):
     import base64
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    # Se la scadenza è già nota dalla pagina, la passiamo direttamente
+    info_scadenza = (
+        f"SCADENZA (già estratta dalla pagina, usala direttamente): {scadenza_nota}"
+        if scadenza_nota
+        else "SCADENZA: cerca nel PDF la data di pubblicazione e calcola +30 giorni con precisione"
+    )
 
     prompt_base = f"""
 Sei un assistente esperto in concorsi pubblici universitari italiani.
@@ -192,55 +199,42 @@ META|VERDETTO|CATEGORIA|SCADENZA
 Dove:
 - VERDETTO e' una di: CONSIGLIATA, RISERVE, NON_COMPATIBILE
 - CATEGORIA es: D - Area amministrativo-gestionale
-- SCADENZA: data esatta calcolata in formato GG/MM/AAAA oppure N/D
+- SCADENZA: {scadenza_nota if scadenza_nota else "data calcolata GG/MM/AAAA oppure N/D"}
 
 POI UNA RIGA VUOTA, POI IL MESSAGGIO TELEGRAM.
 
 PROFILO CANDIDATO:
 {PROFILO_CANDIDATO}
 
+{info_scadenza}
+
 CRITERI VERDETTO (rispettali con rigore assoluto):
 
-NON_COMPATIBILE solo se presente almeno una di queste barriere oggettive
-che determinano ESCLUSIONE dalla procedura selettiva:
-- Il bando richiede un titolo di laurea in discipline che il candidato non possiede
-  (es. laurea in medicina, giurisprudenza, ingegneria, se il candidato ha filosofia/HR)
-- I posti sono riservati ESCLUSIVAMENTE a categorie protette L.68/99 o a
-  dipendenti interni — ovvero un esterno non puo' proprio partecipare
-- Richiede madrelingua in una lingua diversa dall'italiano
-- Richiede un'abilitazione professionale specifica non posseduta
-  (es. abilitazione forense, ordine professionale)
-- Qualsiasi altro requisito la cui mancanza comporta ESCLUSIONE AUTOMATICA
+NON_COMPATIBILE solo se presente almeno una barriera oggettiva di esclusione:
+- Richiede laurea in discipline che il candidato NON possiede
+  (es. medicina, giurisprudenza, ingegneria — lui ha filosofia e HR)
+- Posti riservati ESCLUSIVAMENTE a categorie protette L.68/99 o interni
+- Richiede madrelingua in lingua diversa dall'italiano
+- Richiede abilitazione professionale specifica non posseduta
+- Qualsiasi requisito la cui mancanza comporta esclusione automatica per regolamento
 
 RISERVE se il candidato puo' presentare domanda ma:
-- Manca di esperienza specifica richiesta (PA, ricerca, ecc.)
-- Le materie d'esame richiedono studio approfondito in aree non coperte dal suo CV
-- Ci sono requisiti preferenziali (non obbligatori) non soddisfatti
-- Il profilo e' distante ma non escluso
+- Manca di esperienza specifica (PA, ricerca, ambiti tecnici particolari)
+- Le materie d'esame richiedono studio in aree non coperte dal CV
+- Ci sono requisiti preferenziali non soddisfatti
 
 CONSIGLIATA se:
 - Tutti i requisiti di ammissione sono soddisfatti
-- Il profilo del candidato e' ragionevolmente allineato con le attivita' richieste
+- Il profilo e' ragionevolmente allineato con le attivita' richieste
 
-ATTENZIONE: la mancanza di esperienza specifica NON e' mai motivo di
-NON_COMPATIBILE. Al massimo e' RISERVE. Il verdetto NON_COMPATIBILE
-e' riservato a barriere che impediscono oggettivamente la candidatura.
+LA MANCANZA DI ESPERIENZA SPECIFICA NON E' MAI NON_COMPATIBILE.
+NON_COMPATIBILE = impossibilita' oggettiva di partecipare, non difficolta'.
 
 REGOLE FONDAMENTALI:
 - NON usare asterischi, underscore, cancelletti o qualsiasi markdown
 - Usa solo testo semplice ed emoji
 - NON troncare mai il testo: ogni sezione deve essere completa
 - Il verdetto va SEMPRE in cima, prima di tutto il resto
-
-CALCOLO SCADENZA (fondamentale, sii preciso):
-- Cerca nel bando la data di pubblicazione all'Albo o sulla Gazzetta Ufficiale
-- Calcola la scadenza sulla base delle informazioni contenute nel bando
-- Tieni conto dei giorni esatti del mese
-- Se la data e' esplicitamente indicata nel bando, usala direttamente
-- Se va calcolata come "30 giorni dalla pubblicazione", calcola la data esatta
-- Se la data di pubblicazione non e' nel PDF, scrivi "vedi bando"
-- Indica sempre: "Pubblicato il [data] - Scadenza il [data] ore 12:00"
-- Riporta la stessa data calcolata anche nella riga META come SCADENZA
 
 STRUTTURA OBBLIGATORIA DEL MESSAGGIO TELEGRAM:
 
@@ -252,28 +246,27 @@ VERDETTO: [CANDIDATURA CONSIGLIATA / CON RISERVE / NON COMPATIBILE] [🟢/🟡/�
 RIEPILOGO
 Categoria: [es. D - Area amministrativo-gestionale]
 Posti: [numero]
-Pubblicato il [data] - Scadenza il [data calcolata] ore 12:00
+Scadenza: {scadenza_nota if scadenza_nota else "[data] ore 12:00"}
 Sede: [destinazione specifica e/o reparto specifico se indicato]
 
 REQUISITI CHIAVE
-[elenca solo requisiti non banali: titolo studio specifico, certificazioni,
+[solo requisiti non banali: titolo studio specifico, certificazioni,
 esperienza minima, conoscenze tecniche particolari]
 [NON elencare mai: eta 18+, cittadinanza, idoneita fisica, assenza condanne,
-obbligo leva, assenza parentele con Rettore]
+obbligo leva, parentele con Rettore]
 
 COMPATIBILITA
 [per ogni requisito non banale: emoji + requisito + valutazione in una riga]
 ✅ = soddisfatto pienamente
 ⚠️ = soddisfatto parzialmente o con riserve
-❌ = non soddisfatto (solo per barriere oggettive)
+❌ = non soddisfatto (solo per barriere oggettive di esclusione)
 
 TITOLI VALUTABILI
-[se il bando prevede valutazione titoli: elenca quali titoli del candidato
-possono dare punteggio aggiuntivo e stima approssimativa se possibile]
+[titoli del candidato utili per punteggio aggiuntivo con stima]
 [se non prevista: scrivi "Non prevista valutazione titoli"]
 
 MATERIE D'ESAME
-[elenca le materie delle prove, una per riga]
+[materie delle prove, una per riga]
 """
 
     if pdf_bytes is None:
