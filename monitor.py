@@ -178,26 +178,50 @@ META|VERDETTO|CATEGORIA|SCADENZA
 Dove:
 - VERDETTO e' una di: CONSIGLIATA, RISERVE, NON_COMPATIBILE
 - CATEGORIA es: D - Area amministrativo-gestionale
-- SCADENZA: data esatta calcolata in formato GG/MM/AAAA (vedi istruzioni sotto)
-  Se non calcolabile scrivi: N/D
+- SCADENZA: data esatta calcolata in formato GG/MM/AAAA oppure N/D
 
-POI UNA RIGA VUOTA, POI IL MESSAGGIO TELEGRAM:
+POI UNA RIGA VUOTA, POI IL MESSAGGIO TELEGRAM.
 
 PROFILO CANDIDATO:
 {PROFILO_CANDIDATO}
 
+CRITERI VERDETTO (rispettali con rigore assoluto):
+
+NON_COMPATIBILE solo se presente almeno una di queste barriere oggettive
+che determinano ESCLUSIONE dalla procedura selettiva:
+- Il bando richiede un titolo di laurea in discipline che il candidato non possiede
+  (es. laurea in medicina, giurisprudenza, ingegneria, se il candidato ha filosofia/HR)
+- I posti sono riservati ESCLUSIVAMENTE a categorie protette L.68/99 o a
+  dipendenti interni — ovvero un esterno non puo' proprio partecipare
+- Richiede madrelingua in una lingua diversa dall'italiano
+- Richiede un'abilitazione professionale specifica non posseduta
+  (es. abilitazione forense, ordine professionale)
+- Qualsiasi altro requisito la cui mancanza comporta ESCLUSIONE AUTOMATICA
+
+RISERVE se il candidato puo' presentare domanda ma:
+- Manca di esperienza specifica richiesta (PA, ricerca, ecc.)
+- Le materie d'esame richiedono studio approfondito in aree non coperte dal suo CV
+- Ci sono requisiti preferenziali (non obbligatori) non soddisfatti
+- Il profilo e' distante ma non escluso
+
+CONSIGLIATA se:
+- Tutti i requisiti di ammissione sono soddisfatti
+- Il profilo del candidato e' ragionevolmente allineato con le attivita' richieste
+
+ATTENZIONE: la mancanza di esperienza specifica NON e' mai motivo di
+NON_COMPATIBILE. Al massimo e' RISERVE. Il verdetto NON_COMPATIBILE
+e' riservato a barriere che impediscono oggettivamente la candidatura.
+
 REGOLE FONDAMENTALI:
 - NON usare asterischi, underscore, cancelletti o qualsiasi markdown
 - Usa solo testo semplice ed emoji
-- Massimo 700 parole per il messaggio Telegram (esclusa la riga META)
+- NON troncare mai il testo: ogni sezione deve essere completa
 - Il verdetto va SEMPRE in cima, prima di tutto il resto
-- NON scrivere testi troncati o parole interrotte per mancanza di caratteri,
-  il messaggio deve risultare quanto piu' professionale possibile
 
 CALCOLO SCADENZA (fondamentale, sii preciso):
 - Cerca nel bando la data di pubblicazione all'Albo o sulla Gazzetta Ufficiale
 - Calcola la scadenza sulla base delle informazioni contenute nel bando
-- Tieni conto dei giorni esatti del mese (es. febbraio ha 28/29 giorni)
+- Tieni conto dei giorni esatti del mese
 - Se la data e' esplicitamente indicata nel bando, usala direttamente
 - Se va calcolata come "30 giorni dalla pubblicazione", calcola la data esatta
 - Se la data di pubblicazione non e' nel PDF, scrivi "vedi bando"
@@ -221,29 +245,28 @@ REQUISITI CHIAVE
 [elenca solo requisiti non banali: titolo studio specifico, certificazioni,
 esperienza minima, conoscenze tecniche particolari]
 [NON elencare mai: eta 18+, cittadinanza, idoneita fisica, assenza condanne,
-obbligo leva, assenza parentele con Rettore — sono sempre soddisfatti]
+obbligo leva, assenza parentele con Rettore]
 
 COMPATIBILITA
 [per ogni requisito non banale: emoji + requisito + valutazione in una riga]
 ✅ = soddisfatto pienamente
 ⚠️ = soddisfatto parzialmente o con riserve
-❌ = non soddisfatto
+❌ = non soddisfatto (solo per barriere oggettive)
 
 TITOLI VALUTABILI
 [se il bando prevede valutazione titoli: elenca quali titoli del candidato
 possono dare punteggio aggiuntivo e stima approssimativa se possibile]
-[se non prevista valutazione titoli: scrivi "Non prevista valutazione titoli"]
+[se non prevista: scrivi "Non prevista valutazione titoli"]
 
 MATERIE D'ESAME
-[elenca sinteticamente le materie su cui vertono le prove, una per riga]
-[utile per capire cosa studiare in caso di candidatura]
+[elenca le materie delle prove, una per riga]
 """
 
     if pdf_bytes is None:
         prompt = prompt_base + f"\n\nTITOLO BANDO (PDF non disponibile):\n{titolo_bando}"
         msg = client.messages.create(
             model="claude-sonnet-4-5",
-            max_tokens=900,
+            max_tokens=1200,
             messages=[{"role": "user", "content": prompt}]
         )
         return msg.content[0].text
@@ -251,7 +274,7 @@ MATERIE D'ESAME
     pdf_base64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
     msg = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=900,
+        max_tokens=1200,
         messages=[{
             "role": "user",
             "content": [
