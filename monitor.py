@@ -258,6 +258,7 @@ In caso di dubbio tra NON_COMPATIBILE e RISERVE, scegli sempre RISERVE.
 REGOLE FONDAMENTALI:
 - NON usare asterischi, underscore, cancelletti o qualsiasi markdown
 - Usa solo testo semplice ed emoji
+- Massimo 350 parole per il messaggio Telegram (esclusa la riga META)
 - NON troncare mai il testo: ogni sezione deve essere completa e professionale
 - Il verdetto va SEMPRE in cima, prima di tutto il resto
 
