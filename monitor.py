@@ -616,6 +616,32 @@ def main():
     titoli_visti = titoli_in_memoria(memoria)
     nuovi_bandi  = [b for b in bandi_attuali if b["titolo"] not in titoli_visti]
     print(f"Bandi nuovi da analizzare: {len(nuovi_bandi)}")
+    
+    # PROTEZIONE CREDITI: se troppi bandi "nuovi", la memoria è stata resettata
+    # Salva i titoli senza chiamare l'AI e avvisa
+    if len(nuovi_bandi) > 3:
+        print(f"  ATTENZIONE: {len(nuovi_bandi)} bandi nuovi rilevati. Probabile reset memoria.")
+        print(f"  Salvo i titoli senza analisi AI per proteggere i crediti.")
+        invia_telegram(
+            f"⚠️ ATTENZIONE\n\n"
+            f"Rilevati {len(nuovi_bandi)} bandi 'nuovi' — probabile reset della memoria.\n\n"
+            f"I titoli sono stati salvati senza analisi AI per proteggere i crediti.\n"
+            f"Verifica bandi_visti.json nel repository, poi avvia manualmente il workflow."
+        )
+        for bando in nuovi_bandi:
+            memoria.append({
+                "titolo":           bando["titolo"],
+                "codice":           estrai_codice(bando["titolo"]),
+                "url_pdf":          bando["url_pdf"],
+                "data_rilevamento": oggi.isoformat(),
+                "verdetto":         "❓",
+                "categoria":        "N/D",
+                "scadenza":         bando.get("scadenza_pag") or "N/D",
+                "seguito":          False,
+                "documenti_visti":  bando.get("tutti_i_pdf", [])
+            })
+        salva_memoria(memoria)
+        return
 
     for i, bando in enumerate(nuovi_bandi):
         print(f"\n[{i+1}/{len(nuovi_bandi)}] {bando['titolo'][:80]}...")
